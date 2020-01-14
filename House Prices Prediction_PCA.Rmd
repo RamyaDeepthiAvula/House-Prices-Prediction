@@ -1,0 +1,691 @@
+---
+title: "House Prices Prediction"
+author: "Ramya Deepthi Avula"
+date: "January 10, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Since the number of features in this dataset is high, it's advised to load data using StringsAsFactors=False because there might be numeric features which might get converted to factors even if there is one error value which is a character.
+
+```{r}
+setwd("C:/MSBA/Career/Projects/HousePrices")
+train <- read.csv(file="train.csv", stringsAsFactors = F)
+test <- read.csv(file="test.csv", stringsAsFactors = F)
+```
+
+
+# Data Preprocessing
+
+Before converting all characters to factors, let's join train and test sets so they have same levels in all factor variables. This helps to avoid error during prediction due to new levels in any features in test dataset.
+
+We have to remove target variable from train so that it has the same number of variables as test.
+```{r}
+data <- rbind(train[,-81],test)
+data <- data[-1] #Removing Id from data
+```
+Note that the first 1460 rows are of train and the records starting from 1461 belong to test dataset.
+
+Data dictionary mentions that NA=None for below variables. 
+
+Alley, BsmtQual, BsmtCond, BsmtExposure, BsmtFinType1, BsmtFinTyp2, FireplaceQu,
+GarageType, GarageFinish, GarageQual, GarageCond, PoolQC, Fence, MiscFeature.
+
+Let's create a vector of names of variables where NAs are not missing values.
+```{r}
+not_NA <- c("Alley", "BsmtQual", "BsmtCond", "BsmtExposure", "BsmtFinType1", "BsmtFinType2", "FireplaceQu", "GarageType", "GarageFinish", "GarageQual", "GarageCond", "PoolQC", "Fence", "MiscFeature")
+```
+
+These NAs shall be replaced by "None" through a user defined function.
+
+```{r}
+replacena <- function(x) {
+  ifelse(is.na(x),"None",x)
+} #defining replacena function
+
+data[not_NA] <- data.frame(lapply(data[not_NA],replacena)) #applying replacena
+```
+
+Some of the values in other variables are related to the "NA"s in above variables. For example, if there's NA in BsmtQual which means there is no basement, then BsmtFinSF1 will be 0 for the observation. So, we have to look at NAs in these related variables as well. I will do that at a later stage after correcting datatypes
+
+
+Since there are too many variables that need to be converted to factors, getting all the column numbers is time-consuming. Since we have seen in the summary there are no error values (characters in numeric variables), I'll write the data so far to a csv and load the same into R using StringsAsFactors=T.
+
+```{r}
+write.csv(data,'df.csv')
+data <- read.csv(file="df.csv", stringsAsFactors = T)
+```
+
+writing to a csv file has created an ID column named "X", we don't need this.
+
+```{r}
+data <- subset(data, select = -X)
+summary(data)
+```
+
+## Correcting data types
+
+Since this is the beginning of EDA and we haven't seen the variables in detail, let's work on each variable individually with the help of summary and data dictionary.
+
+All data types are correct except MSSubClass and MoSold.
+
+Apart from data types, I also looked at variables that might be related. Let's make a note of everything observed now and work on it step by step.
+
+1. Near zero variance- Utilities,Condition2, RoofMatl
+2. Ordered Factors- ExterQual, ExterCond, BsmtQual, BsmtCond, HeatingQC, KitchenQual, FireplaceQu, GarageQual, GarageCond, PoolQC.
+3.GarageYrBlt is extending upto 2207 which is definitely wrong. It shouldn't be greater than 2010 and also GarageYrBlt<YrSold.
+4.Basement and Garage related variables which are related to the variables where NAs were converted to None.
+4. GrLivArea is living area above ground as per dictionary. So let's see if it equals the sum of X1stFlrSF & X2ndFlrSF or X1stFlrSF, X2ndFlrSF & LowQualFinSF.
+5. Let's check correlation of all bathroom variables with SalePrice. If the correlation for each of them is less, we can combine all of these and eliminate individual variables.
+6.Check frequencies of all Porch and Pool variables. Check correlation/anova of these with SalePrice. If there isn't much relation, club these into single variable.
+7. YrSold itself doesn't make much sense in terms of affecting saleprice but age of the house (based on when it's built/ remodeled) when it was sold should make sense. Check correlation of both with SalePrice and transform the variable accordingly.
+8. Correlation with SalePrice for BedroomAbvGr, KitchenAbvGr, TotRmsAbvGrd. Also, if BedroomAbvGr+KitchenAbvGr=TotRmsAbvGrd. If correlation is less for BedroomAbvGr and KitchenAbvGr and if the above condition satisfies, we can get rid of the individual variables and keep only TotRmsAbvGrd.
+9. Check relationship between OverallCond and OverallQual.
+10. Relationship between SalePrice and YearBuilt/YearRemod.
+11. Relationship between MasVnrType and MasVnrArea.
+12. Relationship between ExterQual and ExterCOnd.
+13. Correlation between BedroomAbvGr and TotRmsAbvGrd.
+14. Correlation between GarageCars & GarageArea.
+15. Relationships between GarageQual & GarageCond & GarageFinish
+
+
+
+```{r}
+data[,c("MSSubClass","MoSold")] <- lapply(data[,c("MSSubClass","MoSold")], factor)
+```
+
+## Near Zero Variance
+
+Let's delete the variables with obvious near zero variance. These can be seen directly in the summary.
+```{r}
+data <- subset(data, select=-c(Utilities,Condition2, RoofMatl))
+```
+
+## Ordered Factors
+
+A few factor variables can be converted to ordered factors. Some of these have same levels, we can change them to ordered factors together, but a few other have to be converted individually.
+```{r}
+ordered_factors1 <- c("ExterQual", "ExterCond", "BsmtQual", "BsmtCond","HeatingQC", "KitchenQual", "FireplaceQu", "GarageQual", "GarageCond", "PoolQC")
+order1 <- function(x) {ordered(x,levels=c("None","Po","Fa","TA","Gd","Ex"))}
+data[,ordered_factors1] <- lapply(data[,ordered_factors1], order1)
+
+ordered_factors2 <- c("BsmtFinType1","BsmtFinType2")
+order2 <- function(x) {ordered(x,levels=c("None","Unf","LwQ","Rec","BLQ","ALQ","GLQ"))}
+data[,ordered_factors2] <- lapply(data[,ordered_factors2], order2)
+
+data$BsmtExposure <- ordered(data$BsmtExposure,levels=c("None","No", "Mn", "Av","Gd"))
+```
+
+## GarageYrBlt
+
+```{r}
+summary(data$GarageYrBlt)
+summary(data$YrSold)
+sum(data$GarageYrBlt>data$YrSold,na.rm = T)
+```
+Let's change all values >2010 and >YrSold to NA
+```{r}
+data$GarageYrBlt[data$GarageYrBlt>2010 | data$GarageYrBlt>data$YrSold]<- NA
+```
+
+## No Basement
+
+Now let's look at the variables related to the variables where NAs are converted to None.
+```{r}
+summary(subset(data,BsmtQual=="None")[,c("BsmtFinSF1","BsmtFinSF2", "BsmtUnfSF","TotalBsmtSF","BsmtFullBath", "BsmtHalfBath")])
+```
+
+
+A few records still have NA values, these can be converted to 0 since there is no basement for these observations. Also, looking at max values, BsmtUnfSF and TotalBsmtSF are non-zero for at least one observation. They have to be converted to 0.
+
+```{r}
+data[c("BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF","BsmtFullBath","BsmtHalfBath")][is.na(data[c("BsmtFinSF1", "BsmtFinSF2", "BsmtUnfSF", "TotalBsmtSF","BsmtFullBath","BsmtHalfBath")])] <- 0
+
+data$BsmtUnfSF <- ifelse(data$BsmtQual=="None",0,data$BsmtUnfSF)
+data$TotalBsmtSF <- ifelse(data$BsmtQual=="None",0,data$TotalBsmtSF)
+```
+
+## No Garage
+
+```{r}
+summary(subset(data,GarageType=="None")[,c("GarageYrBlt","GarageFinish", "GarageCars", "GarageArea","GarageQual","GarageCond")])
+```
+Everything is alright here except GarageYrBlt
+
+Let's remove the NAs in GarageYrBlt. This is a numeric variable, but replacing NA with 0 will be wrong since it means Year 0. I'll transform GarageYrBlt to GarageAge and make it 0 for houses with no garage. Age will be calculated based on year sold because that's the age that matters.
+```{r}
+data$GarageAge <- data$YrSold-data$GarageYrBlt
+summary(data$GarageAge)
+```
+
+Now let's change relevant NAs to 0
+```{r}
+data$GarageAge[data$GarageType=="None"] <- 0
+data$GarageYrBlt <-NULL
+```
+
+
+## Above ground living area
+
+```{r}
+cor(data$X1stFlrSF+data$X2ndFlrSF+data$LowQualFinSF, data$GrLivArea)
+```
+Check correlation of these variables with SalePrice for train dataset.
+
+```{r}
+cor(train$SalePrice, train$X1stFlrSF)
+cor(train$SalePrice, train$X2ndFlrSF)
+cor(train$SalePrice, train$LowQualFinSF)
+cor(train$SalePrice, train$GrLivArea)
+cor(train$GrLivArea, train$X1stFlrSF)
+```
+Based on these corrrelations, I have decided to remove LowQualFinSF. Rest of the variables have considerable correlation with the target variable and so will be handled at a later stage.
+
+```{r}
+data <- subset(data, select=-LowQualFinSF)
+```
+
+## Bath Variables
+```{r}
+cor(train$SalePrice, train$BsmtFullBath)
+cor(train$SalePrice, train$BsmtHalfBath)
+cor(train$SalePrice, train$FullBath)
+cor(train$SalePrice, train$HalfBath)
+cor(train$SalePrice, 0.5*train$HalfBath+train$FullBath+0.5*train$BsmtHalfBath+train$BsmtFullBath)
+cor(train$FullBath,0.5*train$HalfBath+train$FullBath+0.5*train$BsmtHalfBath+train$BsmtFullBath)
+```
+
+Except FullBath, rest of the variables have very less correlation with SalePrice. And the combination of all these variables have higher correlation.
+So, I will combine all these variables into "TotalBath" and delete the individual variables.
+
+
+```{r}
+data$TotalBath <- data$BsmtFullBath+data$FullBath+0.5*(data$BsmtHalfBath+data$HalfBath)
+data = subset(data, select = -c(BsmtHalfBath,BsmtFullBath,HalfBath))
+```
+
+## Wood Deck and Porch
+
+Let's check the frequency of non-zero values in the Porch variables.
+```{r}
+sum(train$OpenPorchSF>0)
+sum(train$X3SsnPorch>0)
+sum(train$ScreenPorch>0)
+sum(train$EnclosedPorch>0)
+```
+
+```{r}
+cor(train$SalePrice, train$WoodDeckSF)
+cor(train$SalePrice, train$OpenPorchSF)
+cor(train$SalePrice, train$X3SsnPorch)
+cor(train$SalePrice, train$ScreenPorch)
+cor(train$SalePrice, train$EnclosedPorch)
+cor(train$SalePrice, train$X3SsnPorch+train$ScreenPorch+train$EnclosedPorch)
+```
+
+It looks like it's better to not make any transformations but X3SsnPorch could be removed.
+```{r}
+data <- subset(data,select=-X3SsnPorch)
+```
+
+## YrSold, YearBuilt, YearRemodAdd
+
+```{r}
+cor(train$SalePrice, train$YearBuilt)
+cor(train$SalePrice,train$YearRemodAdd)
+cor(train$SalePrice, train$YrSold)
+```
+As expected Year sold has little relation with sale price. Since both Year built and Year remodeled have nearly same correlation with saleprice, age of house in the year sold will be calculated using weighted average of these 2. And let's give a little more weight to Yearbuilt. I'm choosing their correlation with SalePrice as weights.
+
+Before creating the new variable let's check if yrSold>YearBuilt and YearRemodAdd.
+```{r}
+sum(data$YrSold < data$YearBuilt)
+sum(data$YrSold <data$YearRemodAdd)
+```
+There are upto 4 cases that need to be looked into.
+```{r}
+subset(data, YrSold < YearBuilt | YrSold < YearRemodAdd)[,c("YrSold","YearBuilt","YearRemodAdd")]
+```
+I will change these 3 values of YrSold to 2009 instead.
+
+```{r}
+data$YrSold <- ifelse(data$YrSold<data$YearBuilt | data$YrSold<data$YearRemodAdd, NA, data$YrSold)
+```
+
+
+Let's create the HouseAge variable that gives the age of house when it's sold
+```{r}
+data$HouseAge <- data$YrSold-(data$YearBuilt*0.523+data$YearRemodAdd*0.51)/(0.523+0.51)
+summary(data$HouseAge)
+
+```
+
+## Rooms above ground
+```{r}
+cor(data$BedroomAbvGr+data$KitchenAbvGr+data$TotalBath, data$TotRmsAbvGrd)
+
+```
+The correlation is not completely 1. Let's not make any changes at this point.
+
+Below is the summary of the data after the changes done so far.
+```{r}
+summary(data)
+```
+Except missing values and outliers, everything else seems to be good. Let's deal with these 2 now.
+
+## Imputation
+
+We are yet to check some relationships. But let's impute the missing values before that. We need to impute train and test separately. So,let's divide the data into original train and test sets, impute and then combine again for data transformations.
+
+```{r}
+train <- cbind(data[1:1460,],SalePrice=train$SalePrice)
+test <- data[1461:2919,]
+```
+
+
+## Data Imputation
+```{r}
+library(missForest)
+set.seed(1234)
+trainimp <- train
+trainimp[,-74] <- missForest(trainimp[,-74])$ximp
+
+#Test-Imputation
+set.seed(1234)
+suppressWarnings(testimp <- missForest(test)$ximp)
+
+```
+
+
+```{r}
+dataimp <- rbind(trainimp[,-74],testimp)
+```
+
+# Exploratory Data Analysis
+
+We have done necessary feature engineering.Let's now do some exploratory analysis before transforming variables as required for modeling.
+
+Let's build a correlation matrix of all numeric variables including SalePrice using the dataset "trainimp"
+```{r}
+#numeric_df <- trainimp[sapply(trainimp,is.numeric)]
+#write.csv(data.frame(cor(numeric_df,method="pearson")),'cormat.csv')
+```
+From the correlation matrix only GrLivArea & OverallQual have a correlation >0.7 with Saleprice. But all the variables affect houseprice to some extent, let's look at the more important variables which we can get using a penalized regression and caret package's variable importance function.
+
+Additionally, I'm using log transformed saleprice since it's heavily right skewed. There are a lot of predictors that need to be log transformed, I'll transform for the actual model we build. The below model is just to see the important features.
+```{r}
+library(caret)
+set.seed(1234)
+tc = trainControl("repeatedcv", number = 10, repeats = 10)
+
+suppressWarnings(model <-train(log(SalePrice)~.,
+              data = trainimp,
+              method = "glmnet",
+              preProcess= c("center","scale"),
+              trControl = tc))
+```
+
+```{r}
+varImp(model)
+```
+
+2 of our engineered features TotalBath and HouseAge made it to top 10. In total, 7 numeric variables and 2 factor variables made it to top 10. Neighborhood has 2 of its levels in top 10.
+
+Let's look at the summary and distributions of the variables of the top 10 variables.
+```{r}
+top_10 <- subset(dataimp, select=c(GrLivArea, OverallQual, GarageCars,TotalBath,HouseAge, OverallCond, Neighborhood,X1stFlrSF,BsmtQual))
+
+summary(top_10)
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+top_10 %>%
+  select_if(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+    facet_wrap(~ key, scales = "free") +
+    geom_histogram()
+
+```
+
+Most of the numeric variables in top 10 have outliers, they are right-skewed.Deleting outliers is a little tricky, we'll know the effect of it only after model evaluation. However, there are a few rules that will work effectively most of the time. 
+
+1. Remove extreme outliers. (< Median-3*IQR & >Median+3*IQR)
+2. Log transformation.
+
+Let's do log-transformation of all right-skewed numeric variables and not just top 10. If any of the variables are still right-skewed after log, we can remove some outliers from them.
+
+However, I'll handle outliers after Exploratory Analysis. Let's see the effect of these outliers visually before removing them or transforming the variables.
+
+
+## GrLivArea
+
+Above ground living area 
+
+```{r}
+ggplot(data=trainimp,aes(GrLivArea,SalePrice))+geom_point()+labs(title="SalePrice v/s GrLivArea", xlab="Above ground living area", ylab="SalePrice")+stat_smooth()
+```
+There's a perfect positive relationship which is affected by outliers. I will remove the 4 outliers that are obvious in the plot.
+```{r}
+trainimp <- subset(trainimp, GrLivArea<4500)
+trainimp <- subset(trainimp, SalePrice<700000)
+```
+
+Let's look athe plot now.
+```{r}
+ggplot(data=trainimp,aes(GrLivArea,SalePrice))+geom_point()+labs(title="SalePrice v/s GrLivArea", xlab="Above ground living area", ylab="SalePrice")+stat_smooth()
+```
+
+We can say the relationship is strongest when 500 < GrLivArea < 2000
+
+## OverallQual
+
+This is a discrete numeric variable and so using it as a factor and visualizing using boxplot makes better sense.
+
+```{r}
+ggplot(data=trainimp,aes(factor(OverallQual),SalePrice))+geom_boxplot()+labs(title="SalePrice v/s Overall Quality", xlab="Overall Quality", ylab="SalePrice")
+```
+
+## GarageCars
+
+```{r}
+summary(factor(trainimp$GarageCars))
+ggplot(data=trainimp,aes(factor(GarageCars),SalePrice))+geom_boxplot()+labs(title="SalePrice v/s Garage Cars", xlab="Garage Cars", ylab="SalePrice")
+```
+Sale price of houses increased with number of cars. We can ignore GarageCars=4 since it's only for 5 records.
+
+##TotalBath
+```{r}
+ggplot(data=trainimp,aes(TotalBath,SalePrice))+geom_point()+labs(title="SalePrice v/s Total Bath", xlab="Total Bath", ylab="SalePrice")+stat_smooth()
+```
+
+Considering TotalBath is one of the top important variables, we can delete the 2 outliers that are affecting its general relationship with SalePrice.
+
+```{r}
+trainimp <- subset(trainimp, TotalBath<=4.8)
+```
+
+## HouseAge
+
+```{r}
+ggplot(data=trainimp,aes(HouseAge,SalePrice))+geom_point()+labs(title="Sale Price v/s House Age", xlab="House Age", ylab="SalePrice")+stat_smooth()
+```
+As expected, the house prices are high for new homes with the exception of a few outliers. There is one house which is 64 years old and managed to have a high sale price. Let's look at this house.
+
+The house has overallQual and OverallCond are rated very high and it also has features like Fireplace and Porch Area. So, this is not considered outlier since the price is affected by other features.
+
+```{r}
+subset(trainimp, HouseAge>50 & SalePrice>400000)
+```
+
+```{r}
+ggplot(data=trainimp,aes(Neighborhood,SalePrice))+geom_boxplot()+labs(title="Sale Price v/s Neighborhood", xlab="Neighborhood", ylab="SalePrice")+ theme(axis.text.x = element_text(angle=90))
+```
+It's very clear that some of the neighborhoods like NridgHt, NoRidge are expensive.
+
+
+## OverallQual v/s OverallCond
+
+It's very interesting to know that good quality of material doesn't assure good condition of house. It should depend upon maintenance.
+
+```{r}
+cor(trainimp$OverallCond, trainimp$OverallQual)
+ggplot(data=trainimp,aes(factor(OverallCond),OverallQual))+geom_boxplot()+labs(title="Overall Condition v/s Overall Quality", xlab="OverallCond", ylab="OverallQual")
+```
+
+If both of these are good, they should result in high sale price. Let's check for the interaction.
+
+```{r}
+ggplot(data=trainimp,aes(factor(OverallQual),SalePrice))+geom_point()+labs(title="SalePrice v/s Overall Quality", xlab="Overall Quality", ylab="SalePrice")+facet_wrap(~OverallCond)
+```
+
+```{r}
+suppressWarnings(ggplot(data=trainimp,aes(GrLivArea,SalePrice))+geom_point()+labs(title="Sale Price v/s GrLivArea by Neighborhood", xlab="GrLivArea", ylab="SalePrice")+facet_wrap(~Neighborhood)+stat_smooth())
+```
+The above plot shows that the increase in sale price with above ground living area is sharp for NridgHt, StoneBr and SawyerW to some extent.
+
+## SalePrice v/s GrLivArea by BldgType
+
+There is a sharp increase of saleprice with GrLivArea for single family detached homes.
+```{r}
+ggplot(data=trainimp,aes(GrLivArea,SalePrice))+geom_point()+labs(title="Sale Price v/s Above Ground Living Area by Building Type", xlab="GrLivArea", ylab="SalePrice")+facet_wrap(~BldgType)+stat_smooth()
+```
+
+An interaction between GrLivArea and Neighborhood is improving the R-Square and 
+adjusted R-square to approximately 0.8. So, we should try a model using this interaction. Note that the individual R-squares are around 55 and the r-square using both is roughly 74. The highest is for R-square. But interactions could overfit our model quite easily. So, let's try models with and without interactions.
+```{r}
+summary(lm(SalePrice~Neighborhood, trainimp))
+summary(lm(SalePrice~GrLivArea, trainimp))
+summary(lm(SalePrice~GrLivArea+Neighborhood, trainimp))
+summary(lm(SalePrice~GrLivArea*Neighborhood, trainimp))
+```
+
+Note that we have removed some rows in trainimp and the new trainimp has 1454 rows instead of 1460.
+
+```{r}
+dataimp <- rbind(trainimp[,-74],testimp)
+SalePrice <- trainimp[,74]
+```
+
+
+# Getting data ready for building model
+
+## Handling Skewness
+
+Skewness Coefficient:
+
+>1 or <-1 : Heavily skewed
+0.5 to 1 or -1 to -0.5 : Moderately skewed.
+-0.5 to 0.5 : Normal distrbution.
+
+For example, let's check for the target variable in train data.
+```{r}
+library(e1071)
+skewness(trainimp$SalePrice)
+hist(trainimp$SalePrice)
+```
+SalePrice is heavily right(positive coefficient) skewed. We need to perform log transformation on it. If a variable is left-skewed, we need to do square-root transformation.
+
+One more thing that we need to decide is upper and lower limits for skewness. Although -0.5 to 0.5 is the theoretical interval, moderate skewness can be accepted too. Let's look at the below variable.
+
+```{r}
+skewness(dataimp$OverallCond)
+hist(dataimp$OverallCond)
+```
+
+Skewness coefficient is 0.57 but it's not very skewed. So, I decide to accept skewness between -0.75 and 0.75.
+
+
+Let's calculate skewness of each and every variable and let's make transformations based on these values.
+
+```{r}
+library(fBasics)
+library(dplyr)
+dataimp%>%
+  select_if(is.numeric) %>%
+  colSkewness()
+```
+Let's make vectors of all variables based on skewness. We only have right-skewed variables.
+
+```{r}
+right_skew <- c("LotFrontage","LotArea", "MasVnrArea", "BsmtFinSF1", "BsmtFinSF2","BsmtUnfSF","X1stFlrSF","X2ndFlrSF","GrLivArea","KitchenAbvGr", "WoodDeckSF", "OpenPorchSF","PoolArea","EnclosedPorch","ScreenPorch","MiscVal")
+```
+
+
+These should be log-transformed. However, before that, we have to think about the complications with log and sqrt transformations. Log of any value below or equal to 0 doesn't exist, it will result in NaN values in our predictions. Also, log of any value between 0 and 1 will be negative and working on negative values might also result in NaN values based on the functions we use. And we know that square root of negative numbers is indefinite.
+From the summary of the data, it's evident that there are no negative values but there are a lot of zeroes. So, let's add 1.1 to values to keep them above 1 before log transformation. We don't have any problem for square root transformation.
+
+Let's compare the skew of these variables before and after log transformation. Most of these still seem to be right-skewed but the extent of skewness decreased. I will remove Lotfrontage, BsmtUnfSF from my right-skew list because log transformation is making them negatively-skewed.
+```{r}
+dataimp[,right_skew]%>%
+  colSkewness()
+log(dataimp[,right_skew]+1.1)%>%
+  colSkewness()
+```
+
+```{r}
+right_skew <- c("LotArea", "MasVnrArea", "BsmtFinSF1", "BsmtFinSF2","X1stFlrSF","X2ndFlrSF","GrLivArea","KitchenAbvGr", "WoodDeckSF", "OpenPorchSF","EnclosedPorch","ScreenPorch","PoolArea","MiscVal")
+
+dataimp[,right_skew] <- log(dataimp[,right_skew]+1.1)
+```
+
+
+## Multicollinearity
+
+From the correlation matrix of all numeric variables, it's seen that there is multicollinearity issue. I want to use principal component analysis to remove multicollinearity. We will lose the original predictors but we don't need them, we only need the prediction accuracy to be as high as possible.
+
+Multicollinearity can be detected to some extent by using the following functions from dataPreparation() package.
+```{r}
+library(dataPreparation)
+whichAreBijection(dataimp)
+whichAreIncluded(dataimp)
+whichAreInDouble(dataimp)
+whichAreConstant(dataimp)
+```
+
+Let's delete the variables from the above result
+```{r}
+dataimp <- subset(dataimp, select=-PoolQC)
+```
+
+## Principal Component Analysis
+
+To perform principle component analysis, we need all variables to be numeric. So, we have to one hot encode all factor variables to make them numeric. And before that, let's standardize all the numeric predictors.
+
+## Standardization
+
+To do this, we need to separate train and test to avoid data snooping. We don't need the target variable in train data at this point.
+
+```{r}
+trainimp <- dataimp[1:1454,]
+testimp <- dataimp[1455:2913,]
+```
+
+```{r}
+scales <- build_scales(dataSet = trainimp,
+cols = "auto", verbose = FALSE)
+train_scaled <- fastScale(dataSet = trainimp,
+scales = scales, verbose = FALSE)
+scales <- build_scales(dataSet = testimp,
+cols = "auto", verbose = FALSE)
+test_scaled <- fastScale(dataSet = testimp,
+scales = scales, verbose = FALSE)
+```
+
+Now let's combine train and test for one hot encoding. the reason for joining train and test is so that they have same number of variables. If the number of levels is different between them, one hot encoding separately will result in different number of columns.
+
+```{r}
+data_scaled <- rbind(train_scaled,test_scaled)
+```
+
+## Creating dummies
+```{r}
+library(fastDummies)
+data_dummy <- dummy_cols(data_scaled, remove_first_dummy = TRUE)
+```
+The above code results in a dataframe that has n-1 dummies from each factor variable but it also has the initial factor variabls which are dummied. We need to remove the initial factor variables. Ordered factors are not converted to dummies.
+
+Below are the factor variables, but they also have ordered factors which shouldn't be removed.
+```{r}
+names(data_dummy)[sapply(data_dummy, is.factor)]
+```
+
+I'm manually making a vector of the names of factors that need to be removed.
+```{r}
+factors_to_be_removed <- c("MSSubClass","MSZoning","Street","Alley","LotShape","LandContour", "LotConfig","LandSlope","Neighborhood","Condition1","BldgType","HouseStyle", "RoofStyle","Exterior1st","Exterior2nd","MasVnrType","Foundation","Heating", "CentralAir","Electrical","Functional","GarageType","GarageFinish","PavedDrive","Fence","MiscFeature","MoSold","SaleType","SaleCondition") #for future use if any
+
+data_dummy<- subset(data_dummy, select = -c(MSSubClass,MSZoning,Street,Alley,LotShape,LandContour,LotConfig,LandSlope, Neighborhood,Condition1,BldgType,HouseStyle,RoofStyle,Exterior1st,Exterior2nd, MasVnrType,Foundation,Heating,CentralAir,Electrical,Functional,GarageType, GarageFinish,PavedDrive,Fence,MiscFeature,MoSold,SaleType,SaleCondition))
+```
+
+
+Let's check for inclusions, constants, bijections and doubles again.
+```{r}
+whichAreBijection(data_dummy)
+whichAreIncluded(data_dummy)
+whichAreConstant(data_dummy)
+whichAreInDouble(data_dummy)
+```
+
+
+Removing the duplicate columns
+```{r}
+data_dummy <- subset(data_dummy,select = -c(BldgType_Duplex,MSSubClass_150,LotConfig_FR3, Neighborhood_Blueste,HouseStyle_2.5Fin,RoofStyle_Shed,Exterior1st_CBlock,Exterior1st_ImStucc, Exterior1st_Stone,Exterior2nd_Other,Heating_OthW,Electrical_Mix, Functional_Sev, GarageType_None, GarageFinish_None, MiscFeature_Othr,MiscFeature_TenC))
+```
+
+## Near zero variance
+Let's look for near zero variance variables and remove them.
+```{r}
+library(caret)
+nearZeroVar(data_dummy, freqCut = 99/1)
+```
+Removing by column numbers
+```{r}
+data_dummy <- data_dummy[,-c(45,46,50,56,59,62,66,75,88,98,101,103,105,106,110, 112,117,119,120,121,131,132,134,137,140,151,152,154,155,156,159,161,169,177,192:196,198,200,201)]
+```
+
+Let's finally split the data into train and test sets.
+
+```{r}
+train_final <- cbind(data_dummy[1:1454,],SalePrice=SalePrice)
+test_final <- data_dummy[1455:2913,]
+```
+
+
+##PCA
+
+```{r}
+preproc <- preProcess(train_final[,-163], method='pca', thresh=0.99) #use the PCA preprocess
+train.pca <- predict(preproc, train_final[,-163]) 
+test.pca <- predict(preproc, test_final)
+
+dim(train.pca)
+dim(test.pca)
+train.pca <- cbind(train.pca,SalePrice)
+
+summary(train.pca$SalePrice)
+```
+
+```{r}
+quantile(train.pca$SalePrice,0.99)
+```
+
+I will use 99.5% of data and remove other rows based on SalePrice.
+```{r}
+backup <-train.pca
+train.pca <- subset(train.pca, SalePrice<=437919)
+Saleprice.pca <- train.pca[,129]
+```
+Now train.pca has 1439 observations. 
+
+## Building the model
+
+## glmnet
+```{r}
+library(caret)
+set.seed(1234)
+tc = trainControl("repeatedcv", number = 10, repeats = 10)
+
+model <-train(log(SalePrice)~.,
+              data = train.pca,
+              method = "glmnet",
+              trControl = tc)
+model
+```
+
+## glmnet Prediction
+
+```{r}
+pricePredict <- predict(model, newdata=test.pca)
+#converting data in to regular scale
+salePriceVals <- exp(pricePredict) 
+#Writing predictions to a file to submit to Kaggle
+submittestData <- read.csv(file="test.csv",stringsAsFactors = F)
+submittestData <- cbind(submittestData,salePriceVals) # Dont run multiple times new change
+write.csv(data.frame(Id=submittestData$Id,SalePrice=submittestData$salePriceVals),'SubmissionsFinal.csv')
+
+# Kaggle Score = 0.12340
+```
